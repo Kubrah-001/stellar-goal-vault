@@ -100,6 +100,9 @@ describe('GET /api/health', () => {
         isHealthy: true,
         consecutiveFailures: 0,
         lagMs: 5000,
+        freshness: 'fresh',
+        staleLagMs: 300000,
+        freshLagMs: 30000
       });
 
       const res = await request(app).get('/api/health');
@@ -123,6 +126,9 @@ describe('GET /api/health', () => {
         isHealthy: true,
         consecutiveFailures: 0,
         lagMs: 0,
+        freshness: 'fresh',
+        staleLagMs: 300000,
+        freshLagMs: 30000
       });
 
       const res = await request(app).get('/api/health');
@@ -136,11 +142,14 @@ describe('GET /api/health', () => {
       expect(res.body.indexer).toMatchObject({
         isHealthy: expect.any(Boolean),
         consecutiveFailures: expect.any(Number),
+        freshness: expect.stringMatching(/^(fresh|idle|stale|failing|never)$/),
       });
       // lagMs may be null when no poll has succeeded yet
       expect(res.body.indexer).toHaveProperty('lastSuccessfulPollTime');
       expect(res.body.indexer).toHaveProperty('lastKnownLedger');
       expect(res.body.indexer).toHaveProperty('lagMs');
+      expect(res.body.indexer).toHaveProperty('staleLagMs');
+      expect(res.body.indexer).toHaveProperty('freshLagMs');
     });
 
     it('returns HTTP 503 when indexer is unhealthy', async () => {
@@ -158,6 +167,9 @@ describe('GET /api/health', () => {
         isHealthy: false,
         consecutiveFailures: 5,
         lagMs: null,
+        freshness: 'failing',
+        staleLagMs: 300000,
+        freshLagMs: 30000,
       });
 
       const res = await request(app).get('/api/health');
@@ -182,11 +194,68 @@ describe('GET /api/health', () => {
         isHealthy: true,
         consecutiveFailures: 0,
         lagMs: 8000,
+        freshness: 'fresh',
+        staleLagMs: 300000,
+        freshLagMs: 30000
       });
 
       const res = await request(app).get('/api/health');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('ok');
+    });
+
+    it('returns HTTP 200 for healthy-but-idle freshness (not stale)', async () => {
+      vi.spyOn(
+        await import('./services/db'),
+        'checkDbHealth',
+      ).mockReturnValue({ status: 'up', reachable: true });
+
+      vi.spyOn(
+        await import('./services/eventIndexer'),
+        'getIndexerStatus',
+      ).mockReturnValue({
+        lastSuccessfulPollTime: Date.now() - 60_000,
+        lastKnownLedger: 42,
+        isHealthy: true,
+        consecutiveFailures: 0,
+        lagMs: 60_000,
+        freshness: 'idle',
+        staleLagMs: 300000,
+        freshLagMs: 30000,
+      });
+
+      const res = await request(app).get('/api/health');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ok');
+      expect(res.body.indexer.freshness).toBe('idle');
+      expect(res.body.indexer.lagMs).toBe(60_000);
+    });
+
+    it('returns HTTP 503 when indexer freshness is stale', async () => {
+      vi.spyOn(
+        await import('./services/db'),
+        'checkDbHealth',
+      ).mockReturnValue({ status: 'up', reachable: true });
+
+      vi.spyOn(
+        await import('./services/eventIndexer'),
+        'getIndexerStatus',
+      ).mockReturnValue({
+        lastSuccessfulPollTime: Date.now() - 600_000,
+        lastKnownLedger: 42,
+        isHealthy: false,
+        consecutiveFailures: 0,
+        lagMs: 600_000,
+        freshness: 'stale',
+        staleLagMs: 300000,
+        freshLagMs: 30000,
+      });
+
+      const res = await request(app).get('/api/health');
+      expect(res.status).toBe(503);
+      expect(res.body.status).toBe('degraded');
+      expect(res.body.indexer.freshness).toBe('stale');
+      expect(res.body.indexer.isHealthy).toBe(false);
     });
   });
 
@@ -296,6 +365,9 @@ describe('GET /api/health/deep', () => {
         isHealthy: true,
         consecutiveFailures: 0,
         lagMs: 1000,
+        freshness: 'fresh',
+        staleLagMs: 300000,
+        freshLagMs: 30000
       });
 
       const res = await request(app).get('/api/health/deep');
@@ -319,6 +391,9 @@ describe('GET /api/health/deep', () => {
         isHealthy: false,
         consecutiveFailures: 3,
         lagMs: null,
+        freshness: 'failing',
+        staleLagMs: 300000,
+        freshLagMs: 30000,
       });
 
       const res = await request(app).get('/api/health/deep');
